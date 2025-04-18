@@ -434,6 +434,10 @@ const unlockAchievement = (achievement) => {
   gameStore.dices.push(achievement.dice)
 }
 
+const clickQun = () => {
+  alert('群号:920930589')
+}
+
 // 初始化
 onMounted(() => {
   initGame()
@@ -447,7 +451,11 @@ onMounted(() => {
       <template v-if="showMainGame">
         <button class="rules-btn" @click="showAchievementsModal = true">游戏成就</button>
         <button class="rules-btn" v-if="buffsSelected" @click="showSelectedBuffsModal = true">增益: {{ buffsSelected
-          }}/4</button>
+        }}/4</button>
+      </template>
+      <template v-else>
+        <button class="rules-btn" @click="clickQun">加入Q群</button>
+        <a class="rules-btn" target="_blank" href="https://github.com/setube/vue-dice-puzzle">开源地址</a>
       </template>
     </div>
     <h1>掷骰迷局</h1>
@@ -1100,6 +1108,7 @@ button:disabled {
   cursor: pointer;
   font-size: 14px;
   transition: all 0.3s;
+  text-decoration: none;
 }
 
 .rules-btn:hover {
