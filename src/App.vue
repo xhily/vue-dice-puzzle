@@ -272,21 +272,51 @@ const rollDice = () => {
   scoreCombinations.value = []
   // 从availableDice获取骰子数据
   const selectedDiceIndices = selectedStartingDice.value.slice(0, 6)
-  for (let i = 0; i < diceCount; i++) {
-    const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
-    const dieData = availableDice.value[dieIndex].data
-    const randomValue = dieData[Math.floor(Math.random() * dieData.length)]
-    dice.value.push({
-      id: i,
-      type: availableDice.value[dieIndex].type,
-      value: randomValue,
-      selected: false,
-      used: false
-    })
+  // 只在每轮第一个回合确保有得分点
+  if (turn.value === 1) {
+    let hasValidCombination = false
+    let attempts = 0
+    const maxAttempts = 10
+    do {
+      dice.value = []
+      for (let i = 0; i < diceCount; i++) {
+        const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
+        const dieData = availableDice.value[dieIndex].data
+        const randomValue = dieData[Math.floor(Math.random() * dieData.length)]
+        dice.value.push({
+          id: i,
+          type: availableDice.value[dieIndex].type,
+          value: randomValue,
+          selected: false,
+          used: false
+        })
+      }
+      // 检查是否有有效组合
+      hasValidCombination = checkValidCombination(dice.value.map(d => d.value))
+      attempts++
+      // 如果尝试次数过多，强制生成一个1点骰子
+      if (attempts >= maxAttempts && !hasValidCombination) {
+        dice.value[0].value = 1
+        hasValidCombination = true
+      }
+    } while (!hasValidCombination && attempts < maxAttempts)
+  } else {
+    // 非第一个回合保持原有逻辑
+    for (let i = 0; i < diceCount; i++) {
+      const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
+      const dieData = availableDice.value[dieIndex].data
+      const randomValue = dieData[Math.floor(Math.random() * dieData.length)]
+      dice.value.push({
+        id: i,
+        type: availableDice.value[dieIndex].type,
+        value: randomValue,
+        selected: false,
+        used: false
+      })
+    }
   }
   calculatePossibleScores()
 }
-
 // 计分继续本轮
 const continueRound = () => {
   const selectedDiceData = dice.value.filter(d => d.selected && !d.used)
@@ -451,7 +481,7 @@ onMounted(() => {
       <template v-if="showMainGame">
         <button class="rules-btn" @click="showAchievementsModal = true">游戏成就</button>
         <button class="rules-btn" v-if="buffsSelected" @click="showSelectedBuffsModal = true">增益: {{ buffsSelected
-        }}/4</button>
+          }}/4</button>
       </template>
       <template v-else>
         <button class="rules-btn" @click="clickQun">加入Q群</button>
