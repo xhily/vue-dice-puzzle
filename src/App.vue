@@ -39,14 +39,53 @@ const maxBuffs = ref(4)
 const sixCounter = ref(0)
 
 // 计算属性
-const canScore = computed(() => currentRollScore.value > 0 && dice.value.filter(d => d.selected && !d.used).length > 0)
+const canScore = ref(false)
+
+// 检查选中的骰子组合是否有效
+const isValidSelection = (values) => {
+  // 首先检查是否有特殊增益允许任意选择
+  if (buffs.value.some(b => b.effect === 'singleDouble')) {
+    return values.length <= 1 // 单骰出示增益下，只要选择不超过1个骰子即有效
+  }
+  // 检查单骰有效得分
+  const hasValidSingleDice = values.some(v => v === 1 || v === 6 ||
+    (v === 5 && buffs.value.some(b => b.effect === 'fivePoints')) ||
+    (v === 2 && buffs.value.some(b => b.effect === 'twoPoints')))
+  // 检查对子得分
+  const counts = {}
+  values.forEach(value => {
+    counts[value] = (counts[value] || 0) + 1
+  })
+  const hasValidPairs = Object.values(counts).some(count => count >= 3)
+  // 检查顺子得分
+  const has12345 = [1, 2, 3, 4, 5].every(v => values.includes(v))
+  const has23456 = [2, 3, 4, 5, 6].every(v => values.includes(v))
+  const has123456 = [1, 2, 3, 4, 5, 6].every(v => values.includes(v))
+  // 检查组合得分(如果有特殊增益)
+  const hasSpecialCombo =
+    (buffs.value.some(b => b.effect === 'evenCombo') && [2, 4, 6].every(v => values.includes(v))) ||
+    (buffs.value.some(b => b.effect === 'oneFiveCombo') && values.includes(1) && values.includes(5))
+
+  return hasValidSingleDice || hasValidPairs || has12345 || has23456 || has123456 || hasSpecialCombo
+}
 
 // 初始化游戏
 const initGame = () => {
   showDiceSelector.value = true
   showMainGame.value = false
   showBuffSelection.value = false
+  // 判断是否新玩家
+  if (gameStore.isNewPlayer) {
+    showRulesModal.value = true
+  }
+  // 清空已选骰子
   selectedStartingDice.value = []
+  // 自动选择最后6个骰子
+  const availableDiceCount = availableDice.value.length
+  // 否则选择最后6个
+  for (let i = availableDiceCount - 6; i < availableDiceCount; i++) {
+    selectedStartingDice.value.push(i)
+  }
 }
 
 // 开始游戏
@@ -66,14 +105,49 @@ const startNewRound = () => {
   roundScore.value = 0
   dice.value = []
   selectedDice.value = []
-  rollDice()
+  currentRollScore.value = 0
+  scoreCombinations.value = []
+  // 确保重置所有骰子状态
+  const diceCount = 6
+  const selectedDiceIndices = selectedStartingDice.value.slice(0, 6)
+  // 每轮第一个回合确保有得分点
+  let hasValidCombination = false
+  let attempts = 0
+  const maxAttempts = 10
+  do {
+    dice.value = []
+    for (let i = 0; i < diceCount; i++) {
+      const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
+      const dieData = availableDice.value[dieIndex].data
+      const randomValue = dieData[Math.floor(Math.random() * dieData.length)]
+      dice.value.push({
+        id: i,
+        type: availableDice.value[dieIndex].type,
+        value: randomValue,
+        selected: false,
+        used: false
+      })
+    }
+    // 检查是否有有效组合
+    hasValidCombination = checkValidCombination(dice.value.map(d => d.value))
+    attempts++
+    // 如果尝试次数过多，强制生成一个1点骰子
+    if (attempts >= maxAttempts && !hasValidCombination) {
+      dice.value[0].value = 1
+      hasValidCombination = true
+    }
+  } while (!hasValidCombination && attempts < maxAttempts)
+
+  calculatePossibleScores()
 }
 
 // 切换骰子选择状态
 const toggleSelectDie = (id) => {
   const die = dice.value.find(d => d.id === id)
   if (die && !die.used) {
+    // 更改状态
     die.selected = !die.selected
+    // 计算当前选择的得分情况
     calculatePossibleScores()
   }
 }
@@ -82,8 +156,43 @@ const toggleSelectDie = (id) => {
 const calculatePossibleScores = () => {
   const selectedValues = dice.value.filter(d => d.selected && !d.used).map(d => d.value)
   const remainingValues = dice.value.filter(d => !d.used && !d.selected).map(d => d.value)
+  // 如果没有选择骰子，直接返回
+  if (selectedValues.length === 0) {
+    currentRollScore.value = 0
+    scoreCombinations.value = []
+    canScore.value = false
+    return
+  }
+  // 检查每个骰子是否都属于有效组合
+  let allDiceContribute = true
+  // 创建临时数组用于逐个移除骰子进行测试
+  for (let i = 0; i < selectedValues.length; i++) {
+    // 创建一个不包含当前骰子的数组
+    const valuesWithoutCurrent = [...selectedValues.slice(0, i), ...selectedValues.slice(i + 1)]
+    // 计算完整选择的分数和不包含当前骰子的分数
+    const fullScore = calculateScore(selectedValues, remainingValues)
+    const reducedScore = calculateScore(valuesWithoutCurrent, remainingValues)
+    // 如果移除一个骰子后分数没有变化，说明该骰子不贡献分数
+    if (fullScore.score === reducedScore.score) {
+      allDiceContribute = false
+      break
+    }
+  }
+  // 计算最终分数
+  const result = calculateScore(selectedValues, remainingValues)
+  currentRollScore.value = allDiceContribute ? result.score : 0
+  scoreCombinations.value = allDiceContribute ? result.combinations : ['选择了无效的骰子组合']
+  canScore.value = allDiceContribute && result.score > 0
+}
+
+// 辅助函数：计算选中骰子的得分
+const calculateScore = (selectedValues, remainingValues) => {
   let score = 0
   let combinations = []
+  // 检查选择是否有效
+  if (selectedValues.length > 0 && !isValidSelection(selectedValues)) {
+    return { score: 0, combinations: ['无效的骰子组合'] }
+  }
   // 应用抽骰子类增益
   if (buffs.value.some(b => b.effect === 'drawBonus')) {
     score += 100
@@ -247,8 +356,7 @@ const calculatePossibleScores = () => {
     score += 500
     combinations.push('回合≥3奖励: 500分')
   }
-  currentRollScore.value = score
-  scoreCombinations.value = combinations
+  return { score, combinations }
 }
 
 // 切换初始骰子选择
@@ -265,20 +373,45 @@ const toggleStartingDie = (index) => {
 
 // 掷骰子
 const rollDice = () => {
-  const diceCount = 6
-  dice.value = []
-  selectedDice.value = []
-  currentRollScore.value = 0
-  scoreCombinations.value = []
-  // 从availableDice获取骰子数据
-  const selectedDiceIndices = selectedStartingDice.value.slice(0, 6)
-  // 只在每轮第一个回合确保有得分点
-  if (turn.value === 1) {
-    let hasValidCombination = false
-    let attempts = 0
-    const maxAttempts = 10
-    do {
-      dice.value = []
+  // 如果是重新获得所有骰子的情况
+  if (dice.value.filter(d => !d.used).length === 0) {
+    const diceCount = 6
+    dice.value = []
+    selectedDice.value = []
+    currentRollScore.value = 0
+    scoreCombinations.value = []
+    // 从availableDice获取骰子数据
+    const selectedDiceIndices = selectedStartingDice.value.slice(0, 6)
+    // 只在每轮第一个回合确保有得分点
+    if (turn.value === 1) {
+      let hasValidCombination = false
+      let attempts = 0
+      const maxAttempts = 10
+      do {
+        dice.value = []
+        for (let i = 0; i < diceCount; i++) {
+          const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
+          const dieData = availableDice.value[dieIndex].data
+          const randomValue = dieData[Math.floor(Math.random() * dieData.length)]
+          dice.value.push({
+            id: i,
+            type: availableDice.value[dieIndex].type,
+            value: randomValue,
+            selected: false,
+            used: false
+          })
+        }
+        // 检查是否有有效组合
+        hasValidCombination = checkValidCombination(dice.value.map(d => d.value))
+        attempts++
+        // 如果尝试次数过多，强制生成一个1点骰子
+        if (attempts >= maxAttempts && !hasValidCombination) {
+          dice.value[0].value = 1
+          hasValidCombination = true
+        }
+      } while (!hasValidCombination && attempts < maxAttempts)
+    } else {
+      // 非第一个回合
       for (let i = 0; i < diceCount; i++) {
         const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
         const dieData = availableDice.value[dieIndex].data
@@ -291,32 +424,21 @@ const rollDice = () => {
           used: false
         })
       }
-      // 检查是否有有效组合
-      hasValidCombination = checkValidCombination(dice.value.map(d => d.value))
-      attempts++
-      // 如果尝试次数过多，强制生成一个1点骰子
-      if (attempts >= maxAttempts && !hasValidCombination) {
-        dice.value[0].value = 1
-        hasValidCombination = true
-      }
-    } while (!hasValidCombination && attempts < maxAttempts)
+    }
   } else {
-    // 非第一个回合保持原有逻辑
-    for (let i = 0; i < diceCount; i++) {
-      const dieIndex = selectedDiceIndices[i % selectedDiceIndices.length]
+    // 仅重新掷未使用的骰子
+    const remainingDice = dice.value.filter(d => !d.used)
+    const selectedDiceIndices = selectedStartingDice.value.slice(0, 6)
+    for (let die of remainingDice) {
+      const dieIndex = selectedDiceIndices[die.id % selectedDiceIndices.length]
       const dieData = availableDice.value[dieIndex].data
-      const randomValue = dieData[Math.floor(Math.random() * dieData.length)]
-      dice.value.push({
-        id: i,
-        type: availableDice.value[dieIndex].type,
-        value: randomValue,
-        selected: false,
-        used: false
-      })
+      die.value = dieData[Math.floor(Math.random() * dieData.length)]
+      die.selected = false
     }
   }
   calculatePossibleScores()
 }
+
 // 计分继续本轮
 const continueRound = () => {
   const selectedDiceData = dice.value.filter(d => d.selected && !d.used)
@@ -342,21 +464,37 @@ const continueRound = () => {
   if (remainingDice.length === 0) {
     // 没有剩余骰子，重新获得6个骰子
     rollDice()
+    // 检查新掷出的骰子是否有得分可能
+    const hasValidCombination = checkValidCombination(dice.value.map(d => d.value))
+    if (!hasValidCombination) {
+      // 没有有效组合，结束本轮
+      roundScore.value = 0
+      alert('重新获得骰子后无可获得分数的组合，本轮得分作废。')
+      endRound(false)
+      return
+    }
   } else {
+    // 使用剩余骰子重新随机点数
+    for (let die of remainingDice) {
+      const dieIndex = selectedStartingDice.value[die.id % selectedStartingDice.value.length]
+      const dieData = availableDice.value[dieIndex].data
+      die.value = dieData[Math.floor(Math.random() * dieData.length)]
+      die.selected = false
+    }
     // 检查剩余骰子是否有得分可能
     const hasValidCombination = checkValidCombination(remainingDice.map(d => d.value))
     if (!hasValidCombination) {
       // 没有有效组合，结束本轮
-      if (remainingDice.length > 0) {
-        roundScore.value = 0
-        alert('无可获得分数的骰子，本轮得分作废。')
-      }
+      roundScore.value = 0
+      alert('无可获得分数的骰子，本轮得分作废。')
       endRound(false)
       return
     }
-    // 继续本轮，自动进入下一回合
-    rollDice()
   }
+  // 重置选择状态
+  currentRollScore.value = 0
+  scoreCombinations.value = []
+  calculatePossibleScores()
 }
 
 // 计分结束本轮
@@ -457,6 +595,14 @@ const checkAchievementCondition = (achievement) => {
   }
 }
 
+// 打开游戏规则弹窗
+const openRulesModal = () => {
+  showRulesModal.value = !showRulesModal.value
+  if (gameStore.isNewPlayer) {
+    gameStore.isNewPlayer = false
+  }
+}
+
 // 解锁成就
 const unlockAchievement = (achievement) => {
   if (gameStore.achievement.includes(achievement.id)) return
@@ -477,13 +623,13 @@ onMounted(() => {
 <template>
   <div class="game-container">
     <div class="header-buttons">
-      <button class="rules-btn" @click="showRulesModal = true">游戏规则</button>
+      <button class="rules-btn" @click="openRulesModal">游戏规则</button>
       <template v-if="showMainGame">
         <button class="rules-btn" @click="showAchievementsModal = true">游戏成就</button>
         <button class="rules-btn" v-if="buffsSelected" @click="showSelectedBuffsModal = true">增益: {{ buffsSelected
-          }}/4</button>
+        }}/4</button>
       </template>
-      <template v-else>
+      <template v-else-if="!showMainGame && !gameStore.isNewPlayer">
         <button class="rules-btn" @click="clickQun">加入Q群</button>
         <a class="rules-btn" target="_blank" href="https://github.com/setube/vue-dice-puzzle">开源地址</a>
       </template>
@@ -523,17 +669,12 @@ onMounted(() => {
             <div :class="['dot', die.type]" v-for="item in die.value" :key="item"></div>
           </div>
         </div>
-        <!-- <div class="score-display" v-if="scoreCombinations.length">
-        <h3>得分组合</h3>
-        <div class="scoreCombinations">
-          <span class="combo" v-for="(combo, index) in scoreCombinations" :key="index">
-            {{ combo }}
-          </span>
-        </div>
-        <h3>预计得分: {{ currentRollScore }}</h3>
-      </div> -->
         <div class="score-display">
-          <h3>预计得分: {{ currentRollScore }}</h3>
+          <h3 v-if="canScore">预计得分: {{ currentRollScore }}</h3>
+          <h3 v-else-if="dice.filter(d => d.selected && !d.used).length > 0" style="color: #e74c3c;">
+            无效的骰子组合
+          </h3>
+          <h3 v-else>请选择骰子</h3>
         </div>
         <div class="controls">
           <button :disabled="!canScore" @click="continueRound">
@@ -553,10 +694,10 @@ onMounted(() => {
         </div>
       </div>
     </div>
-    <div class="modal-overlay" v-if="showRulesModal" @click="showRulesModal = false">
+    <div class="modal-overlay" v-if="showRulesModal" @click="openRulesModal">
       <div class="modal-content" @click.stop>
         <h2>游戏规则</h2>
-        <button class="close-btn" @click="showRulesModal = false">×</button>
+        <button class="close-btn" @click="openRulesModal">×</button>
         <div class="rules-section">
           <h3>游戏玩法</h3>
           <ol>

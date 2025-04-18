@@ -3,6 +3,8 @@ import { encryptData, decryptData } from '../plugins/crypto'
 
 export const useGameStore = defineStore('game', {
   state: () => ({
+    // 是否新玩家
+    isNewPlayer: true,
     // 成就完成情况
     achievement: [],
     // 已经拥有的骰子
