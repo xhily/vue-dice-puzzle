@@ -16,7 +16,7 @@ export const decryptData = (encryptedData) => {
   try {
     const bytes = CryptoJS.AES.decrypt(encryptedData, __APP_NAME__)
     const decryptedStr = bytes.toString(CryptoJS.enc.Utf8)
-    return JSON.parse(decryptedStr)
+    return JSON.parse(JSON.parse(decryptedStr))
   } catch (error) {
     console.error('数据解密失败:', error)
     return null
