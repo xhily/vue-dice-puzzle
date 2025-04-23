@@ -34,6 +34,7 @@ const selectedDice = ref([]) // 当前选中的骰子
 const currentRollScore = ref(0) // 当前选择骰子组合的得分
 const dice = ref([]) // 当前场上的骰子
 const buffs = ref([]) // 当前已激活的增益效果
+
 const maxBuffs = ref(4) // 最大可选增益数量
 const sixCounter = ref(0) // 6点骰子计数器
 const sixChainActive = ref(false) // 六链效果是否激活
@@ -57,7 +58,6 @@ const showDebugConsole = ref(false)
 const diceSetter = ref([1, 2, 3, 4, 5, 6]) // 骰子值
 const isAdminTest = ref(false) // 是否处于管理员测试模式
 
-// 检查选中的骰子组合是否有效
 const isValidSelection = (values) => {
   // 首先应用骰子变换增益
   let transformedValues = [...values]
@@ -66,17 +66,15 @@ const isValidSelection = (values) => {
       value === buff.params.fromValue ? buff.params.toValue : value
     )
   })
-  // 首先检查是否有特殊增益允许任意选择
-  if (buffs.value.some(b => b.type === BUFF_TYPES.SELECTION && b.params.maxSelection === 1)) {
-    return values.length <= 1 // 单骰出示增益下，只要选择不超过1个骰子即有效
-  }
   // 检查单骰有效得分 - 使用变换后的值
-  const hasValidSingleDice = transformedValues.some(v =>
-    v === 1 ||
-    v === 6 ||
-    (v === 5 && buffs.value.some(b => b.type === BUFF_TYPES.SINGLE_DICE && b.params.diceValue === 5)) ||
-    (v === 2 && buffs.value.some(b => b.type === BUFF_TYPES.SINGLE_DICE && b.params.diceValue === 2))
-  )
+  const isSingleDiceValid = (value) => {
+    return (
+      value === 1 ||
+      value === 6 ||
+      (value === 5 && buffs.value.some(b => b.type === BUFF_TYPES.SINGLE_DICE && b.params.diceValue === 5)) ||
+      (value === 2 && buffs.value.some(b => b.type === BUFF_TYPES.SINGLE_DICE && b.params.diceValue === 2))
+    )
+  }
   // 检查对子得分 - 使用变换后的值
   const counts = {}
   transformedValues.forEach(value => {
@@ -87,7 +85,110 @@ const isValidSelection = (values) => {
   const has12345 = [1, 2, 3, 4, 5].every(v => transformedValues.includes(v))
   const has23456 = [2, 3, 4, 5, 6].every(v => transformedValues.includes(v))
   const has123456 = [1, 2, 3, 4, 5, 6].every(v => transformedValues.includes(v))
-  return hasValidSingleDice || hasValidPairs || has12345 || has23456 || has123456
+  // 检查是否每个骰子都是有效得分项
+  const allDiceValid = computed(() => {
+    // 如果是顺子，则所有骰子都有效
+    if (has12345 || has23456 || has123456) {
+      return true
+    }
+    // 如果有对子（三个或更多相同点数），则这些骰子都有效
+    if (hasValidPairs) {
+      // 找出所有构成对子的骰子值
+      const pairValues = Object.entries(counts).filter(([_, count]) => count >= 3).map(([value, _]) => parseInt(value))
+      // 检查每个骰子是否都是有效的单骰或者是对子的一部分
+      return transformedValues.every(value => isSingleDiceValid(value) || pairValues.includes(value))
+    }
+    // 检查是否包含有效单骰和偶数组合
+    const hasEvenComboSubset = (values) => {
+      if (!buffs.value.some(b => b.type === BUFF_TYPES.COMBO && b.params.requiredValues && b.params.requiredValues.every(v => v % 2 === 0))) return false
+      // 检查是否包含2,4,6
+      return [2, 4, 6].every(v => values.includes(v));
+    }
+    // 检查是否有1-5组合增益
+    const hasOneFiveCombo = buffs.value.some(b =>
+      b.type === BUFF_TYPES.COMBO &&
+      b.params.requiredValues &&
+      b.params.requiredValues.length === 2 &&
+      b.params.requiredValues.includes(1) &&
+      b.params.requiredValues.includes(5)
+    )
+    // 检查1-5组合的骰子是否都有效
+    if (hasOneFiveCombo && transformedValues.includes(1) && transformedValues.includes(5)) {
+      // 在1-5组合中，所有的1和5都是有效的
+      return transformedValues.every(value => value === 1 || value === 5 || isSingleDiceValid(value))
+    }
+    if (hasEvenComboSubset(transformedValues)) {
+      // 找出所有非偶数组合的骰子
+      const nonEvenComboDice = transformedValues.filter(v => v !== 2 && v !== 4 && v !== 6)
+      // 检查非偶数组合的骰子是否都是有效单骰
+      return nonEvenComboDice.every(isSingleDiceValid)
+    }
+    // 如果没有顺子、对子和偶数组合，则每个骰子都必须是有效的单骰
+    return transformedValues.every(isSingleDiceValid)
+  })
+
+  // 检查偶数组合增益
+  const hasEvenComboBuff = buffs.value.some(b =>
+    b.type === BUFF_TYPES.COMBO &&
+    b.params.requiredValues &&
+    b.params.requiredValues.every(v => v % 2 === 0)
+  )
+
+  // 判断是否满足偶数组合增益
+  const hasCompleteEvenCombo = hasEvenComboBuff && isCompleteEvenCombo(transformedValues);
+  // 如果有完整的偶数组合，直接返回 true
+  if (hasCompleteEvenCombo) {
+    return true
+  }
+  // 检查是否有1-5组合增益
+  const hasOneFiveCombo = buffs.value.some(b =>
+    b.type === BUFF_TYPES.COMBO &&
+    b.params.requiredValues &&
+    b.params.requiredValues.length === 2 &&
+    b.params.requiredValues.includes(1) &&
+    b.params.requiredValues.includes(5)
+  )
+  // 判断是否满足1-5组合增益
+  const hasValidOneFiveCombo = hasOneFiveCombo && canFormOneFiveCombo(transformedValues)
+  // 输出调试信息
+  // console.log(
+  //   '检查选中的骰子组合是否有效:',
+  //   transformedValues,
+  //   'hasValidOneFiveCombo:',
+  //   hasValidOneFiveCombo,
+  //   'allDiceValid:',
+  //   allDiceValid.value
+  // )
+  // 在检查最终有效性时考虑所有条件
+  if (hasValidOneFiveCombo || hasCompleteEvenCombo || allDiceValid.value) {
+    return true
+  }
+  return false
+}
+
+// 检查是否可以从骰子中提取1-5组合
+const canFormOneFiveCombo = (values) => {
+  // 必须只包含1和5，不能有其他骰子
+  return values.includes(1) && values.includes(5) && values.every(v => v === 1 || v === 5)
+}
+
+// 检查完整的偶数组合 (2,4,6)，要求恰好只有这三个值
+const isCompleteEvenCombo = (values) => {
+  // 如果骰子数量不是3个，直接返回false
+  if (values.length !== 3) {
+    return false
+  }
+  const requiredValues = [2, 4, 6];
+  let remainingValues = [...values]; // 复制一份用于操作
+  for (const value of requiredValues) {
+    const index = remainingValues.indexOf(value);
+    if (index === -1) {
+      return false // 如果找不到当前值，直接返回 false
+    }
+    remainingValues.splice(index, 1) // 找到后移除该值
+  }
+  // 如果remainingValues为空，说明恰好只有2,4,6三个值
+  return remainingValues.length === 0 // 确保没有额外的骰子
 }
 
 // 初始化游戏
@@ -106,6 +207,10 @@ const initGame = () => {
   buffsSelected.value = 0
   // 自动选择最后6个骰子
   const availableDiceCount = availableDice.value.length
+  // 如果所有骰子都解锁了, 自动开启测试模式
+  if (availableDiceCount === 12) {
+    isAdminTest.value = true
+  }
   // 否则选择最后6个
   for (let i = availableDiceCount - 6; i < availableDiceCount; i++) {
     selectedStartingDice.value.push(i)
@@ -178,42 +283,120 @@ const calculatePossibleScores = () => {
   const selectedDice = dice.value.filter(d => d.selected && !d.used)
   const selectedValues = selectedDice.map(d => d.value)
   const remainingValues = dice.value.filter(d => !d.used && !d.selected).map(d => d.value)
+
   // 如果没有选择骰子，直接返回
   if (selectedValues.length === 0) {
     currentRollScore.value = 0
     canScore.value = false
     return
   }
+
   // 应用骰子变换检查有效性
   const isValid = isValidSelection(selectedValues)
+
+  // 输出调试信息
+  // console.log('isValidSelection 结果:', isValid)
+
   if (!isValid) {
     currentRollScore.value = 0
     canScore.value = false
     return
   }
-  // 检查每个骰子是否都贡献分数
+
+  // 检查是否有1-5组合增益
+  const hasOneFiveCombo = buffs.value.some(b =>
+    b.type === BUFF_TYPES.COMBO &&
+    b.params.requiredValues &&
+    b.params.requiredValues.length === 2 &&
+    b.params.requiredValues.includes(1) &&
+    b.params.requiredValues.includes(5)
+  )
+
+  // 检查是否有偶数组合增益
+  const hasEvenCombo = buffs.value.some(b =>
+    b.type === BUFF_TYPES.COMBO &&
+    b.params.requiredValues &&
+    b.params.requiredValues.every(v => v % 2 === 0)
+  )
+
+  // 如果满足1-5组合条件，并且只包含1和5
+  const is15ComboOnly = hasOneFiveCombo &&
+    selectedValues.includes(1) &&
+    selectedValues.includes(5) &&
+    selectedValues.every(v => v === 1 || v === 5)
+
+  // 检查基础得分项 - 1点和6点
+  const hasBasicScoringDice = selectedValues.some(v => v === 1 || v === 6)
+
+  // 检查是否有有效单骰增益
+  const hasSingleDiceBonus = selectedValues.some(v =>
+    buffs.value.some(b => b.type === BUFF_TYPES.SINGLE_DICE && b.params.diceValue === v)
+  )
+
+  // 检查对子
+  const hasPairs = (() => {
+    const counts = {}
+    selectedValues.forEach(v => counts[v] = (counts[v] || 0) + 1)
+    return Object.values(counts).some(count => count >= 3)
+  })()
+
+  // 检查顺子
+  const hasStraight =
+    [1, 2, 3, 4, 5].every(v => selectedValues.includes(v)) ||
+    [2, 3, 4, 5, 6].every(v => selectedValues.includes(v)) ||
+    [1, 2, 3, 4, 5, 6].every(v => selectedValues.includes(v))
+
+  // 检查偶数组合
+  const hasCompleteEvenCombo = hasEvenCombo &&
+    selectedValues.length === 3 &&
+    [2, 4, 6].every(v => selectedValues.includes(v))
+
+  // console.log('各项检查结果:', {
+  //   is15ComboOnly,
+  //   hasBasicScoringDice,
+  //   hasSingleDiceBonus,
+  //   hasPairs,
+  //   hasStraight,
+  //   hasCompleteEvenCombo
+  // })
+
+  // 如果满足任一条件，直接计算分数
+  if (is15ComboOnly || hasBasicScoringDice || hasSingleDiceBonus || hasPairs || hasStraight || hasCompleteEvenCombo) {
+    const result = calculateScore(selectedValues, remainingValues)
+    currentRollScore.value = result
+    canScore.value = result > 0
+    return
+  }
+
+  // 如果不满足上述条件，检查每个骰子是否都有贡献分数
+  // 这部分可能导致问题，先注释掉
+  /*
   let allDiceContribute = true
   // 遍历每个选中的骰子，测试其贡献
   for (let i = 0; i < selectedDice.length; i++) {
     // 创建一个不包含当前骰子的副本
     const valuesWithoutCurrent = [...selectedValues]
     valuesWithoutCurrent.splice(i, 1)
+    
     // 如果除去这个骰子，其他骰子组合仍然有效
     if (valuesWithoutCurrent.length > 0 && isValidSelection(valuesWithoutCurrent)) {
       // 计算完整选择和移除一个骰子后的分数
       const fullResult = calculateScore(selectedValues, remainingValues)
       const reducedResult = calculateScore(valuesWithoutCurrent, remainingValues)
+      
       // 如果移除骰子后分数没有变化，说明该骰子不贡献分数
-      if (fullResult === reducedResult) {
+      if (fullResult <= reducedResult) {
         allDiceContribute = false
         break
       }
     }
   }
-  // 计算分数
+  */
+
+  // 简化处理：直接认为已通过 isValidSelection 的组合是有效的
   const result = calculateScore(selectedValues, remainingValues)
-  currentRollScore.value = allDiceContribute ? result : 0
-  canScore.value = allDiceContribute && currentRollScore.value > 0
+  currentRollScore.value = result
+  canScore.value = result > 0
 }
 
 // 辅助函数：计算选中骰子的得分
@@ -271,21 +454,36 @@ const calculateScore = (selectedValues, remainingValues) => {
     else if (buff.params.requiredValues.every(v => transformedValues.includes(v))) {
       score += buff.params.bonusPoints
     }
+    // 检查是否是偶数组合增益
+    if (buff.params.requiredValues &&
+      buff.params.requiredValues.every(v => v % 2 === 0)) {
+      // 检查是否恰好是完整的2,4,6组合（只有这三个值）
+      const isExactEvenCombo = transformedValues.length === 3 &&
+        transformedValues.includes(2) &&
+        transformedValues.includes(4) &&
+        transformedValues.includes(6) &&
+        transformedValues.every(v => [2, 4, 6].includes(v));
+      if (isExactEvenCombo) {
+        score += 800  // 偶数组合的固定分数
+      }
+    }
   })
   // 计算单骰得分
-  // 先处理基础得分
   transformedValues.forEach(value => {
     if (value === 1) {
       score += 25
     } else if (value === 6) {
       score += 50
     }
+    // 注意：此处不需要给2和5添加基础分，因为它们会在下面的单骰增益中处理
   })
-  // 再处理单骰子得分增益类增益
+  // 处理单骰子得分增益
   buffs.value.filter(buff => buff.type === BUFF_TYPES.SINGLE_DICE).forEach(buff => {
     const matchingDice = transformedValues.filter(v => v === buff.params.diceValue)
     if (matchingDice.length > 0) {
+      // 确保每个匹配的骰子都获得额外分数
       const additionalPoints = matchingDice.length * buff.params.bonusPoints
+      console.log(`单骰增益得分: ${buff.params.diceValue}点 × ${matchingDice.length} = ${additionalPoints}分`)
       score += additionalPoints
     }
   })
@@ -314,7 +512,7 @@ const calculateScore = (selectedValues, remainingValues) => {
     // 如果有12345，只计算这个
     score += 1000
   }
-  // 应用条件性奖励
+  // 应用条件性奖励（包括偶数奖励）
   buffs.value.filter(buff => buff.type === BUFF_TYPES.CONDITIONAL).forEach(buff => {
     // 奇数/偶数骰子奖励
     if (buff.params.valueCondition) {
@@ -327,10 +525,31 @@ const calculateScore = (selectedValues, remainingValues) => {
         }
       }
       else if (buff.params.valueCondition === 'even') {
-        matchingDice = transformedValues.filter(v => v % 2 === 0)
-        if (matchingDice.length > 0 && buff.params.bonusPerDie) {
-          const bonusPoints = matchingDice.length * buff.params.bonusPerDie
-          score += bonusPoints
+        // 找出所有偶数骰子
+        const evenDice = transformedValues.filter(v => v % 2 === 0)
+        if (evenDice.length > 0) {
+          // 检查每个偶数骰子是否有分数贡献
+          let validEvenDiceCount = 0
+          evenDice.forEach(value => {
+            // 检查这个骰子是否有分数贡献
+            const isValidSingle = value === 6  // 6点本身有分数
+            const isPartOfPair = counts[value] >= 3  // 是否是对子的一部分
+            const isPartOfStraight =
+              ([1, 2, 3, 4, 5].every(v => transformedValues.includes(v)) && value <= 5) || // 12345
+              ([2, 3, 4, 5, 6].every(v => transformedValues.includes(v)) && value >= 2) || // 23456
+              ([1, 2, 3, 4, 5, 6].every(v => transformedValues.includes(v)))  // 123456
+            const isPartOfEvenCombo = [2, 4, 6].every(v => transformedValues.includes(v)) &&
+              [2, 4, 6].includes(value)  // 是否是偶数组合的一部分
+
+            if (isValidSingle || isPartOfPair || isPartOfStraight || isPartOfEvenCombo) {
+              validEvenDiceCount++
+            }
+          })
+
+          // 只为有效的偶数骰子添加额外分数
+          if (validEvenDiceCount > 0) {
+            score += validEvenDiceCount * 200
+          }
         }
       }
     }
@@ -894,6 +1113,7 @@ const resetBuffs = () => {
 // 初始化
 onMounted(() => {
   initGame()
+
   // 检查window对象上是否已经存在isAdminTest属性
   if (!Object.getOwnPropertyDescriptor(window, 'isAdminTest')) {
     Object.defineProperty(window, 'isAdminTest', {
@@ -920,7 +1140,7 @@ onMounted(() => {
       <template v-if="showMainGame">
         <button class="rules-btn" @click="showAchievementsModal = true">游戏成就</button>
         <button class="rules-btn" v-if="buffsSelected" @click="showSelectedBuffsModal = true">增益: {{ buffsSelected
-        }}/4</button>
+          }}/4</button>
       </template>
       <template v-else-if="!showMainGame && !gameStore.isNewPlayer">
         <button class="rules-btn" @click="clickQun">加入Q群</button>
@@ -1121,7 +1341,7 @@ onMounted(() => {
 </template>
 <style>
 body {
-  font-family: 'Arial', sans-serif;
+  font-family: "Arial", sans-serif;
   background-color: #1a1a2e;
   color: #e6e6e6;
   max-width: 800px;
@@ -1144,17 +1364,17 @@ h3 {
 }
 
 ::-webkit-scrollbar:horizontal {
-  height: 6px
+  height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-  border-radius: 10px
+  border-radius: 10px;
 }
 
 ::-webkit-scrollbar-thumb {
   background-color: rgba(255, 255, 255, 0.1);
   border-radius: 10px;
-  transition: all .2s ease-in-out
+  transition: all 0.2s ease-in-out;
 }
 
 ::-webkit-scrollbar-thumb:hover {
@@ -1232,7 +1452,7 @@ h3 {
   justify-content: center;
   gap: 20px;
   margin: 30px 0;
-  padding: 15px;
+  padding: 20px 0;
   background-color: rgba(0, 0, 0, 0.2);
   border-radius: 10px;
 }
@@ -1505,6 +1725,10 @@ button:hover {
   margin-top: 25px;
 }
 
+.dice-selector {
+  padding: 0;
+}
+
 .buff-option,
 .dice-option {
   background: rgba(255, 255, 255, 0.1);
@@ -1645,7 +1869,8 @@ button:hover {
   margin-bottom: 20px;
 }
 
-.rules-btn {
+.rules-btn,
+.test-btn {
   padding: 8px 15px;
   background: linear-gradient(to right, #6a3093, #a044ff);
   color: white;
@@ -1655,18 +1880,11 @@ button:hover {
   font-size: 14px;
   transition: all 0.3s;
   text-decoration: none;
+  margin-left: 10px;
 }
 
 .test-btn {
-  padding: 8px 15px;
   background: linear-gradient(to right, #e74c3c, #c0392b);
-  color: white;
-  border: none;
-  border-radius: 4px;
-  cursor: pointer;
-  font-size: 14px;
-  transition: all 0.3s;
-  text-decoration: none;
 }
 
 .debug-console {
@@ -1676,21 +1894,29 @@ button:hover {
   right: 0;
   background-color: rgba(0, 0, 0, 0.9);
   color: #e6e6e6;
-  padding: 15px;
   z-index: 1100;
   height: 300px;
-  overflow-y: auto;
-  font-family: 'Consolas', monospace;
+  font-family: "Consolas", monospace;
   border-top: 2px solid #f5a623;
   box-shadow: 0 -5px 15px rgba(0, 0, 0, 0.3);
 }
 
 .console-header {
+  position: sticky;
+  top: 0;
+  background-color: rgba(0, 0, 0, 0.9);
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding-bottom: 10px;
+  padding: 15px;
   margin-bottom: 10px;
+  border-bottom: 1px solid #f5a623;
+  z-index: 1;
+}
+
+.console-body {
+  overflow-y: auto;
+  height: calc(100% - 60px);
 }
 
 .console-header h3 {
@@ -1791,6 +2017,10 @@ select {
   text-align: center;
 }
 
+.command-section li {
+  list-style: none;
+}
+
 .command-section h4 {
   color: #2ecc71;
   margin-top: 0;
@@ -1810,13 +2040,12 @@ select {
 
 .transform-indicator {
   position: absolute;
-  bottom: -15px;
+  bottom: -20px;
   left: 0;
   right: 0;
   text-align: center;
   font-size: 10px;
   color: #f5a623;
-  background: rgba(0, 0, 0, 0.7);
   border-radius: 8px;
   padding: 2px;
 }
