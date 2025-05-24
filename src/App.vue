@@ -1012,10 +1012,7 @@ const unlockAchievement = (achievement) => {
   gameStore.dices.push(achievement.dice)
 }
 
-// Q群按钮点击
-const clickQun = () => {
-  alert('群号:920930589')
-}
+
 
 // 终局奖励逻辑
 const applyFinalBonuses = () => {
@@ -1143,7 +1140,7 @@ onMounted(() => {
           }}/4</button>
       </template>
       <template v-else-if="!showMainGame && !gameStore.isNewPlayer">
-        <button class="rules-btn" @click="clickQun">加入Q群</button>
+
         <a class="rules-btn" target="_blank" href="https://github.com/setube/vue-dice-puzzle">开源地址</a>
       </template>
     </div>
